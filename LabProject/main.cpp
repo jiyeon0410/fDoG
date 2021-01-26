@@ -8,11 +8,11 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core.hpp>
 #include "tinyfiledialogs.h"
 
 using namespace cv;
 using namespace std;
-
 
 //sampling
 template <typename T> T sample(const Mat& img, float y, float x) {
@@ -48,9 +48,15 @@ void getNoise(InputArray _src, OutputArray _ret){
     
     const Mat& src=_src.getMat();
     Mat& ret=_ret.getMatRef();
-    for(int y=0;y<src.rows;y++) for(int x=0;x<src.cols;x++){
-    ret.at<float>(y,x)=rand()/float(RAND_MAX);
-    }
+    parallel_for_(Range(0,src.rows*src.cols), [&](const Range& range){
+        for(int r= range.start;r<range.end;r++)
+        {
+            int y=r/src.cols;
+            int x=r%src.cols;
+            ret.at<float>(y,x)=rand()/float(RAND_MAX);
+            
+        }
+    });
     
 }
 
@@ -154,63 +160,68 @@ void lineIntegral(InputArray _tangent_x, InputArray _tangent_y, InputArray image
     const Mat& input = image.getMat();
     Mat& ret = _ret.getMatRef();
     
-    for(int y=0;y<src_x.rows;y++) for(int x=0;x<src_x.cols;x++)
-    {
-        float cx=x;
-        float cy=y;
-        
-        float tx_x0=sample<float>(src_x, cy,cx);
-        float tx_y0=sample<float>(src_y,cy,cx);
-        
-        float wSum=0;
-        float iSum=0;
-        
-        for(int s=0;s<=KernelSize;s++)
+    parallel_for_(Range(0,src_x.rows*src_x.cols), [&](const Range& range){
+        for(int r= range.start;r<range.end;r++)
         {
-            float gaussian=exp(-(s*s)/(2*(sigma*sigma)));
-            wSum+=gaussian;
-            iSum+=sample<float>(input,cy,cx)*gaussian;
- 
-            float tx_x=sample<float>(src_x, cy, cx);
-            float tx_y=sample<float>(src_y, cy, cx);
-            if( tx_x*tx_x0 + tx_y*tx_y0 <0 ) {
-                tx_x = -tx_x;
-                tx_y = -tx_y;
-            }
-            cx+=tx_x;
-            cy+=tx_y;
-            tx_x0 = tx_x;
-            tx_y0 = tx_y;
-        }
-        cx=x;
-        cy=y;
-        tx_x0=sample<float>(src_x, cy, cx);
-        tx_y0=sample<float>(src_y, cy, cx);
-        
-        for(int s=0;s<=KernelSize ;s++)
-        {
-            if(s!=0){
+            int y=r/src_x.cols;
+            int x=r%src_x.cols;
+            
+            float cx=x;
+            float cy=y;
+            
+            float tx_x0=sample<float>(src_x, cy,cx);
+            float tx_y0=sample<float>(src_y,cy,cx);
+            
+            float wSum=0;
+            float iSum=0;
+            
+            for(int s=0;s<=KernelSize;s++)
+            {
                 float gaussian=exp(-(s*s)/(2*(sigma*sigma)));
                 wSum+=gaussian;
                 iSum+=sample<float>(input,cy,cx)*gaussian;
+     
+                float tx_x=sample<float>(src_x, cy, cx);
+                float tx_y=sample<float>(src_y, cy, cx);
+                if( tx_x*tx_x0 + tx_y*tx_y0 <0 ) {
+                    tx_x = -tx_x;
+                    tx_y = -tx_y;
+                }
+                cx+=tx_x;
+                cy+=tx_y;
+                tx_x0 = tx_x;
+                tx_y0 = tx_y;
             }
-            float tx_x=sample<float>(src_x, cy, cx);
-            float tx_y=sample<float>(src_y, cy, cx);
-            if( tx_x*tx_x0 + tx_y*tx_y0 <0 ) {
-                tx_x = -tx_x;
-                tx_y = -tx_y;
+            cx=x;
+            cy=y;
+            tx_x0=sample<float>(src_x, cy, cx);
+            tx_y0=sample<float>(src_y, cy, cx);
+            
+            for(int s=0;s<=KernelSize ;s++)
+            {
+                if(s!=0){
+                    float gaussian=exp(-(s*s)/(2*(sigma*sigma)));
+                    wSum+=gaussian;
+                    iSum+=sample<float>(input,cy,cx)*gaussian;
+                }
+                float tx_x=sample<float>(src_x, cy, cx);
+                float tx_y=sample<float>(src_y, cy, cx);
+                if( tx_x*tx_x0 + tx_y*tx_y0 <0 ) {
+                    tx_x = -tx_x;
+                    tx_y = -tx_y;
+                }
+
+                cx-=tx_x;
+                cy-=tx_y;
+                tx_x0 = tx_x;
+                tx_y0 = tx_y;
+
             }
-
-            cx-=tx_x;
-            cy-=tx_y;
-            tx_x0 = tx_x;
-            tx_y0 = tx_y;
-
+            ret.at<float>(y,x)=iSum/wSum;
         }
-        ret.at<float>(y,x)=iSum/wSum;
-    }
-   
+    });
 }
+
 void XDoG(InputArray _src, OutputArray _ret, double sigma, const double k, const double p)
 {
     const Mat& src=_src.getMat();
@@ -228,19 +239,18 @@ void Threshold(InputArray _src, OutputArray _ret, double tow)
     Mat& ret = _ret.getMatRef();
     if( &ret!=&src )
         ret.create( src.size(), src.type());
-//    for(int y=0;y<src.rows;y++) for(int x=0;x<src.cols;x++)
-//    {
-//        if(src.at<float>(y,x)<0.&&1+tanh(src.at<float>(y,x)<tow)) ret.at<float>(y,x)=0.;
-//        else ret.at<float>(y,x)=1.;
-//    }
-   
-    for(int y=0;y<src.rows;y++) for(int x=0;x<src.cols;x++)
-    {
-        if(src.at<float>(y,x)>=tow) ret.at<float>(y,x)=1.;
-        else ret.at<float>(y,x)=1.+tanh((src.at<float>(y,x)-tow));
-    }
-}
 
+    parallel_for_(Range(0,src.rows*src.cols), [&](const Range& range){
+        for(int r=range.start ; r<range.end;r++){
+            int y= r/src.cols;
+            int x= r%src.cols;
+            
+            if(src.at<float>(y,x)>=tow) ret.at<float>(y,x)=1.;
+            else ret.at<float>(y,x)=1.+tanh((src.at<float>(y,x)-tow));
+        }
+    });
+}
+                  
 void processImage( InputArray _src, OutputArray _ret)
 {
     const Mat& image = _src.getMat();
@@ -314,7 +324,7 @@ int main() {
     imshow("Threshold", H);
     while(true) {
         int key = waitKey();
-        if( key == 13 )
+        if( key == 'q' )
             break;
         const char* patterns[4] ={"*.jpg", "*.png", "*.jpeg", "*.bmp"};
         if( key == '1' ) {
